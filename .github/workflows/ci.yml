@@ -1,0 +1,150 @@
+name: RTL CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Job 1: Lint all RTL with Verilator (--lint-only, no simulation)
+  # ---------------------------------------------------------------------
+  lint:
+    name: Lint (Verilator)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install Verilator
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y verilator
+
+      - name: Verilator version
+        run: verilator --version
+
+      - name: Lint RTL sources
+        run: |
+          verilator --lint-only -Wall -sv \
+            -I rtl \
+            rtl/*.sv
+
+  # ---------------------------------------------------------------------
+  # Job 2: Directed testbench simulation with Icarus Verilog
+  # ---------------------------------------------------------------------
+  simulate:
+    name: Simulate (Icarus Verilog)
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install Icarus Verilog + GTKWave
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y iverilog gtkwave
+
+      - name: Compile testbench
+        run: |
+          mkdir -p build
+          iverilog -g2012 -o build/sim.out \
+            -I rtl \
+            tb/tb_top.sv rtl/*.sv
+
+      - name: Run simulation
+        run: vvp build/sim.out
+
+      - name: Upload waveform artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: waveform
+          path: |
+            build/*.vcd
+            build/*.fst
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------
+  # Job 3: Randomized CDC stress tests with cocotb (Python-driven)
+  # Runs only once tb/cocotb_tests/ exists — safe to leave in from day one.
+  # ---------------------------------------------------------------------
+  cocotb-stress:
+    name: Cocotb randomized CDC tests
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install Icarus Verilog
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y iverilog
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install cocotb
+        run: pip install cocotb cocotb-bus
+
+      - name: Check for cocotb tests
+        id: check
+        run: |
+          if [ -d "tb/cocotb_tests" ] && [ "$(ls -A tb/cocotb_tests 2>/dev/null)" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run cocotb tests
+        if: steps.check.outputs.found == 'true'
+        working-directory: tb/cocotb_tests
+        run: make
+
+      - name: Skip notice
+        if: steps.check.outputs.found == 'false'
+        run: echo "No cocotb tests found yet — skipping. Add tb/cocotb_tests/ to enable this job."
+
+  # ---------------------------------------------------------------------
+  # Job 4: Formal proof of the Gray-code synchronizer (SymbiYosys)
+  # Runs only once formal/gray_sync.sby exists — safe to leave in from day one.
+  # ---------------------------------------------------------------------
+  formal:
+    name: Formal proof (SymbiYosys)
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Check for formal proof script
+        id: check
+        run: |
+          if [ -f "formal/gray_sync.sby" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install OSS CAD Suite (Yosys + SymbiYosys)
+        if: steps.check.outputs.found == 'true'
+        run: |
+          curl -L -o oss-cad-suite.tgz \
+            https://github.com/YosysHQ/oss-cad-suite-build/releases/latest/download/oss-cad-suite-linux-x64.tgz
+          tar -xzf oss-cad-suite.tgz
+
+      - name: Run formal proof
+        if: steps.check.outputs.found == 'true'
+        run: |
+          source oss-cad-suite/environment
+          cd formal
+          sby -f gray_sync.sby
+
+      - name: Skip notice
+        if: steps.check.outputs.found == 'false'
+        run: echo "No formal/gray_sync.sby found yet — skipping. Add it to enable this job."
