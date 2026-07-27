@@ -1,6 +1,9 @@
 # riscv-csr-cdc-timer
 RISC-V CSR-mapped timer with cross-clock-domain synchronization — CDC-focused RTL design, verification, and closure using open-source and Vivado tooling
 
+## Repository Structure
+
+```
 riscv-csr-cdc-timer/
 ├── .github/
 │   └── workflows/
@@ -52,3 +55,4 @@ riscv-csr-cdc-timer/
 ├── .gitignore
 ├── LICENSE
 └── README.md
+```
